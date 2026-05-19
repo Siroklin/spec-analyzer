@@ -84,15 +84,36 @@ HTML = """<!DOCTYPE html>
     .btn:hover:not(:disabled) { background: #2563eb; }
     .btn:active:not(:disabled) { transform: scale(0.98); }
     .btn:disabled { background: #94a3b8; cursor: not-allowed; }
-    .spinner {
+    .progress-wrap {
       display: none;
-      width: 40px; height: 40px;
-      border: 4px solid #e2e8f0;
-      border-top-color: #3b82f6;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
+      width: 100%;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
     }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    .progress-label {
+      font-size: 0.9rem;
+      color: #475569;
+      font-weight: 500;
+      text-align: center;
+    }
+    .progress-track {
+      width: 100%;
+      height: 10px;
+      background: #e2e8f0;
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      border-radius: 99px;
+      background: linear-gradient(90deg, #3b82f6, #6366f1, #3b82f6);
+      background-size: 200% 100%;
+      animation: shimmer 1.4s linear infinite;
+      transition: width 0.4s ease;
+    }
+    @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
     .error-msg {
       display: none;
       background: #fef2f2;
@@ -131,7 +152,10 @@ HTML = """<!DOCTYPE html>
       <div class="file-name" id="fileName"></div>
     </div>
     <div class="error-msg" id="errorMsg"></div>
-    <div class="spinner" id="spinner"></div>
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-label" id="progressLabel">Чуть-чуть терпения, я усердно работаю…</div>
+      <div class="progress-track"><div class="progress-bar" id="progressBar"></div></div>
+    </div>
     <button class="btn" id="analyzeBtn" disabled>Анализировать</button>
   </div>
 
@@ -160,7 +184,8 @@ HTML = """<!DOCTYPE html>
     const fileName   = document.getElementById('fileName');
     const uploadArea = document.getElementById('uploadArea');
     const analyzeBtn = document.getElementById('analyzeBtn');
-    const spinner    = document.getElementById('spinner');
+    const progressWrap = document.getElementById('progressWrap');
+    const progressBar  = document.getElementById('progressBar');
     const errorMsg   = document.getElementById('errorMsg');
     const results    = document.getElementById('results');
     const tableBody  = document.getElementById('tableBody');
@@ -203,15 +228,21 @@ HTML = """<!DOCTYPE html>
       try {
         const resp = await fetch('/api/analyze', { method: 'POST', body: formData });
         const data = await resp.json();
-        if (!resp.ok) { showError(data.detail || 'Ошибка сервера'); return; }
-        renderTable(data.items);
-        countLabel.textContent = '(' + data.total + ' позиций)';
-        results.style.display = 'block';
-        results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        finishProgress(() => {
+          analyzeBtn.disabled = false;
+          analyzeBtn.textContent = 'Анализировать';
+          if (!resp.ok) { showError(data.detail || 'Ошибка сервера'); return; }
+          renderTable(data.items);
+          countLabel.textContent = '(' + data.total + ' позиций)';
+          results.style.display = 'block';
+          results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
       } catch (err) {
+        clearInterval(progressTimer);
+        progressWrap.style.display = 'none';
+        analyzeBtn.disabled = false;
+        analyzeBtn.textContent = 'Анализировать';
         showError('Не удалось связаться с сервером. Попробуйте позже.');
-      } finally {
-        setLoading(false);
       }
     });
 
@@ -229,10 +260,34 @@ HTML = """<!DOCTYPE html>
       });
     }
 
+    let progressTimer = null;
+
+    function startProgress() {
+      let pct = 0;
+      progressBar.style.width = '0%';
+      progressWrap.style.display = 'flex';
+      // быстро до 70%, потом замедляемся до 90% — ждём реального ответа
+      progressTimer = setInterval(() => {
+        const step = pct < 70 ? 2.5 : pct < 90 ? 0.4 : 0.05;
+        pct = Math.min(pct + step, 90);
+        progressBar.style.width = pct + '%';
+      }, 100);
+    }
+
+    function finishProgress(cb) {
+      clearInterval(progressTimer);
+      progressBar.style.width = '100%';
+      setTimeout(() => {
+        progressWrap.style.display = 'none';
+        progressBar.style.width = '0%';
+        cb();
+      }, 400);
+    }
+
     function setLoading(on) {
       analyzeBtn.disabled = on;
-      spinner.style.display = on ? 'block' : 'none';
       analyzeBtn.textContent = on ? 'Анализирую...' : 'Анализировать';
+      if (on) startProgress();
     }
     function showError(msg) { errorMsg.textContent = msg; errorMsg.style.display = 'block'; }
     function hideError() { errorMsg.style.display = 'none'; }
