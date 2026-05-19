@@ -266,6 +266,8 @@ COLUMN_KEYWORDS = {
 }
 
 MIN_SCORE = 0.35
+# оба столбца обязаны присутствовать — отсекает штампы и служебные таблицы
+REQUIRED_COLUMNS = {"наименование", "единица"}
 
 
 def normalize(text: str) -> str:
@@ -318,12 +320,12 @@ def identify_columns(headers: list) -> dict:
 
 
 def score_table(headers: list, data_rows: int) -> float:
-    col_matches = len(identify_columns(headers))
-    if col_matches == 0:
+    mapping = identify_columns(headers)
+    # таблица без обоих обязательных столбцов — не рассматриваем
+    if not REQUIRED_COLUMNS.issubset(mapping.keys()):
         return 0.0
-    # таблицы с большим числом строк получают бонус — штамп в углу не перебьёт основную таблицу
     row_factor = 1.0 + min(data_rows, 200) / 10.0
-    return col_matches * row_factor
+    return len(mapping) * row_factor
 
 
 @app.get("/")
