@@ -317,8 +317,13 @@ def identify_columns(headers: list) -> dict:
     return mapping
 
 
-def score_table(headers: list) -> int:
-    return len(identify_columns(headers))
+def score_table(headers: list, data_rows: int) -> float:
+    col_matches = len(identify_columns(headers))
+    if col_matches == 0:
+        return 0.0
+    # таблицы с большим числом строк получают бонус — штамп в углу не перебьёт основную таблицу
+    row_factor = 1.0 + min(data_rows, 200) / 10.0
+    return col_matches * row_factor
 
 
 @app.get("/")
@@ -344,11 +349,12 @@ async def analyze_pdf(file: UploadFile = File(...)):
             for page in pdf.pages:
                 tables = page.extract_tables()
                 for table in tables:
-                    if not table or len(table) < 2:
+                    if not table or len(table) < 3:  # минимум 1 заголовок + 2 строки данных
                         continue
                     for header_row_idx in range(min(2, len(table))):
                         headers = [str(cell or "") for cell in table[header_row_idx]]
-                        score = score_table(headers)
+                        data_rows = len(table) - header_row_idx - 1
+                        score = score_table(headers, data_rows)
                         if score > best_score:
                             best_score = score
                             best_table = table
