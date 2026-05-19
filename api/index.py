@@ -243,92 +243,82 @@ HTML = """<!DOCTYPE html>
 
 COLUMN_KEYWORDS = {
     "наименование": [
-        "наименование и технические характеристики",
-        "наименование и техническ",
-        "наименование",
-        "технические характеристики",
-        "материал",
-        "описание",
+        "наименование", "технические характеристики", "характеристика", "описание", "материал",
     ],
     "тип": [
-        "тип, марка, обозначение документа, опросного листа",
-        "тип, марка, обозначение",
-        "тип, марка",
-        "обозначение документа",
-        "опросного листа",
-        "марка",
-        "тип",
+        "тип", "марка", "обозначение", "опросного листа",
     ],
     "код": [
-        "код оборудования, изделия, материала",
-        "код оборудования",
-        "код",
-        "артикул",
-        "арт",
-        "номер",
-        "№",
-        "поз.",
+        "код", "артикул", "арт", "номер", "поз",
     ],
     "изготовитель": [
-        "завод-изготовитель",
-        "завод изготовитель",
-        "изготовитель",
-        "производитель",
-        "завод",
+        "изготовитель", "производитель", "завод",
     ],
     "единица": [
-        "единица измерения",
-        "ед. измерения",
-        "ед.изм",
-        "ед.",
-        "е.и.",
-        "единица",
+        "единица", "ед", "е.и",
     ],
     "количество": [
-        "количество",
-        "кол-во",
-        "кол.",
-        "кол",
-        "объем",
-        "объём",
+        "количество", "кол", "объем", "объём",
     ],
     "комментарий": [
-        "примечание",
-        "примечания",
-        "комментарий",
-        "прим.",
-        "заметки",
+        "примечание", "комментарий", "прим", "заметки",
     ],
 }
+
+MIN_SCORE = 0.35
 
 
 def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", str(text).lower().strip())
 
 
-def match_column(header: str, keywords: list) -> bool:
-    h = normalize(header)
-    return any(kw in h for kw in keywords)
+def tokenize(text: str) -> set:
+    return set(re.findall(r"[а-яёa-z0-9]+", normalize(text)))
+
+
+def col_score(header: str, keywords: list) -> float:
+    h_norm = normalize(header)
+    h_tokens = tokenize(header)
+    best = 0.0
+    for kw in keywords:
+        kw_norm = normalize(kw)
+        kw_tokens = tokenize(kw)
+        if not kw_tokens:
+            continue
+        if kw_norm in h_norm:
+            score = len(kw_tokens) + 1.0  # бонус за точное вхождение фразы
+        else:
+            overlap = len(kw_tokens & h_tokens)
+            score = overlap / len(kw_tokens)
+        best = max(best, score)
+    return best
 
 
 def identify_columns(headers: list) -> dict:
-    mapping = {}
+    # строим список (score, col_name, header_idx) и жадно назначаем
+    candidates = []
     for i, header in enumerate(headers):
         for col_name, keywords in COLUMN_KEYWORDS.items():
-            if col_name not in mapping and match_column(header, keywords):
-                mapping[col_name] = i
-                break
+            score = col_score(header, keywords)
+            if score >= MIN_SCORE:
+                candidates.append((score, col_name, i))
+
+    candidates.sort(reverse=True)
+    assigned_cols: set = set()
+    assigned_idxs: set = set()
+    mapping: dict = {}
+
+    for score, col_name, idx in candidates:
+        if col_name not in assigned_cols and idx not in assigned_idxs:
+            mapping[col_name] = idx
+            assigned_cols.add(col_name)
+            assigned_idxs.add(idx)
+
     return mapping
 
 
 def score_table(headers: list) -> int:
-    score = 0
-    for col_name, keywords in COLUMN_KEYWORDS.items():
-        for header in headers:
-            if match_column(header, keywords):
-                score += 1
-                break
-    return score
+    return len(identify_columns(headers))
 
 
 @app.get("/")
