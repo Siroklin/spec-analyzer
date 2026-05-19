@@ -1,8 +1,12 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 import pdfplumber
 import io
 import re
+import os
+
+HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "public", "index.html")
 
 app = FastAPI()
 
@@ -125,3 +129,8 @@ async def analyze_pdf(file: UploadFile = File(...)):
         )
 
     return {"items": results, "total": len(results)}
+
+
+@app.get("/")
+async def root():
+    return FileResponse(HTML_PATH)
