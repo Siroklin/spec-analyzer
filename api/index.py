@@ -243,35 +243,70 @@ HTML = """<!DOCTYPE html>
 
 COLUMN_KEYWORDS = {
     "наименование": [
-        "наименование", "технические характеристики", "характеристика", "описание", "материал",
+        "наименование и техническая характеристика",
+        "наименование и технические характеристики",
+        "наименование",
+        "технические характеристики",
+        "характеристика",
+        "описание",
+        "материал",
     ],
     "тип": [
-        "тип", "марка", "обозначение", "опросного листа",
+        "тип марка обозначение документа",
+        "тип марка обозначение",
+        "тип марка",
+        "обозначение документа",
+        "опросного листа",
+        "тип",
+        "марка",
     ],
     "код": [
-        "код", "артикул", "арт", "номер", "поз",
+        "код оборудования изделия материала",
+        "код оборудования",
+        "код изделия",
+        "код материала",
+        "код",
+        "артикул",
+        "номер",
     ],
     "изготовитель": [
-        "изготовитель", "производитель", "завод",
+        "завод изготовитель",
+        "изготовитель",
+        "производитель",
+        "завод",
     ],
     "единица": [
-        "единица", "ед", "е.и",
+        "единица измерения",
+        "единица",
+        "ед изм",
+        "ед",
     ],
     "количество": [
-        "количество", "кол", "объем", "объём",
+        "количество",
+        "кол во",
+        "кол",
+        "объем",
+        "объём",
     ],
     "комментарий": [
-        "примечание", "комментарий", "прим", "заметки",
+        "примечание",
+        "комментарий",
+        "прим",
+        "заметки",
     ],
 }
 
 MIN_SCORE = 0.35
-# оба столбца обязаны присутствовать — отсекает штампы и служебные таблицы
 REQUIRED_COLUMNS = {"наименование", "единица"}
 
 
 def normalize(text: str) -> str:
-    return re.sub(r"\s+", " ", str(text).lower().strip())
+    text = str(text).lower().strip()
+    # "Коли-\nчество" → "количество" (мягкий перенос строки через дефис)
+    text = re.sub(r"-\s*\n\s*", "", text)
+    # остальные дефисы и знаки препинания → пробел
+    text = re.sub(r"[-,;/\\]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def tokenize(text: str) -> set:
@@ -297,7 +332,6 @@ def col_score(header: str, keywords: list) -> float:
 
 
 def identify_columns(headers: list) -> dict:
-    # строим список (score, col_name, header_idx) и жадно назначаем
     candidates = []
     for i, header in enumerate(headers):
         for col_name, keywords in COLUMN_KEYWORDS.items():
@@ -319,13 +353,33 @@ def identify_columns(headers: list) -> dict:
     return mapping
 
 
-def score_table(headers: list, data_rows: int) -> float:
+def is_valid_table(headers: list) -> bool:
     mapping = identify_columns(headers)
-    # таблица без обоих обязательных столбцов — не рассматриваем
-    if not REQUIRED_COLUMNS.issubset(mapping.keys()):
-        return 0.0
-    row_factor = 1.0 + min(data_rows, 200) / 10.0
-    return len(mapping) * row_factor
+    return REQUIRED_COLUMNS.issubset(mapping.keys())
+
+
+def is_numbering_row(row: list) -> bool:
+    """Строка-нумерация колонок вида [None, None, '1', '2', '3', ...]"""
+    values = [str(c or "").strip() for c in row if str(c or "").strip()]
+    return bool(values) and all(re.fullmatch(r"\d{1,2}", v) for v in values)
+
+
+def extract_row(row: list, mapping: dict) -> dict:
+    def get(col: str) -> str:
+        idx = mapping.get(col)
+        if idx is None or idx >= len(row):
+            return ""
+        return re.sub(r"\s+", " ", str(row[idx] or "")).strip()
+
+    return {
+        "код": get("код"),
+        "наименование": get("наименование"),
+        "тип": get("тип"),
+        "изготовитель": get("изготовитель"),
+        "единица": get("единица"),
+        "количество": get("количество"),
+        "комментарий": get("комментарий"),
+    }
 
 
 @app.get("/")
@@ -342,64 +396,38 @@ async def analyze_pdf(file: UploadFile = File(...)):
     if len(content) > 20 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Файл слишком большой (максимум 20 МБ)")
 
-    best_table = None
-    best_score = -1
-    best_mapping = {}
+    results = []
 
     try:
         with pdfplumber.open(io.BytesIO(content)) as pdf:
             for page in pdf.pages:
-                tables = page.extract_tables()
-                for table in tables:
-                    if not table or len(table) < 3:  # минимум 1 заголовок + 2 строки данных
+                for table in (page.extract_tables() or []):
+                    if not table or len(table) < 3:
                         continue
-                    for header_row_idx in range(min(2, len(table))):
-                        headers = [str(cell or "") for cell in table[header_row_idx]]
-                        data_rows = len(table) - header_row_idx - 1
-                        score = score_table(headers, data_rows)
-                        if score > best_score:
-                            best_score = score
-                            best_table = table
-                            best_mapping = identify_columns(headers)
-                            best_mapping["_header_row"] = header_row_idx
+
+                    headers = [str(cell or "") for cell in table[0]]
+                    if not is_valid_table(headers):
+                        continue
+
+                    mapping = identify_columns(headers)
+
+                    # пропускаем строку-нумерацию вида '1', '2', '3'...
+                    start = 2 if len(table) > 1 and is_numbering_row(table[1]) else 1
+
+                    for row in table[start:]:
+                        if not row or not any(row):
+                            continue
+                        item = extract_row(row, mapping)
+                        if item["наименование"] or item["код"]:
+                            results.append(item)
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка обработки PDF: {str(e)}")
-
-    if best_table is None or best_score == 0:
-        raise HTTPException(
-            status_code=404,
-            detail="Таблица с материалами не найдена. Убедитесь, что PDF содержит спецификацию с таблицей материалов.",
-        )
-
-    header_row = best_mapping.pop("_header_row", 0)
-    results = []
-
-    for row in best_table[header_row + 1:]:
-        if not row or not any(row):
-            continue
-
-        def get(col: str) -> str:
-            idx = best_mapping.get(col)
-            if idx is None or idx >= len(row):
-                return ""
-            return str(row[idx] or "").strip()
-
-        item = {
-            "код": get("код"),
-            "наименование": get("наименование"),
-            "тип": get("тип"),
-            "изготовитель": get("изготовитель"),
-            "единица": get("единица"),
-            "количество": get("количество"),
-            "комментарий": get("комментарий"),
-        }
-        if item["наименование"] or item["код"]:
-            results.append(item)
 
     if not results:
         raise HTTPException(
             status_code=404,
-            detail="Таблица найдена, но строки с данными не обнаружены.",
+            detail="Таблица с материалами не найдена. Убедитесь, что PDF содержит спецификацию.",
         )
 
     return {"items": results, "total": len(results)}
