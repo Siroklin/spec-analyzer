@@ -221,29 +221,54 @@ HTML = """<!DOCTYPE html>
     analyzeBtn.addEventListener('click', async () => {
       const file = fileInput.files[0];
       if (!file) { showError('Пожалуйста, выберите PDF файл'); return; }
+      if (file.size > 4 * 1024 * 1024) {
+        showError('Файл слишком большой. Платформа ограничивает размер до 4 МБ.');
+        return;
+      }
       hideError();
       setLoading(true);
       const formData = new FormData();
       formData.append('file', file);
+
+      let resp;
       try {
-        const resp = await fetch('/api/analyze', { method: 'POST', body: formData });
-        const data = await resp.json();
-        finishProgress(() => {
-          analyzeBtn.disabled = false;
-          analyzeBtn.textContent = 'Анализировать';
-          if (!resp.ok) { showError(data.detail || 'Ошибка сервера'); return; }
-          renderTable(data.items);
-          countLabel.textContent = '(' + data.total + ' позиций)';
-          results.style.display = 'block';
-          results.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        });
+        resp = await fetch('/api/analyze', { method: 'POST', body: formData });
       } catch (err) {
         clearInterval(progressTimer);
         progressWrap.style.display = 'none';
         analyzeBtn.disabled = false;
         analyzeBtn.textContent = 'Анализировать';
-        showError('Не удалось связаться с сервером. Попробуйте позже.');
+        showError('Не удалось связаться с сервером. Проверьте соединение.');
+        return;
       }
+
+      let data;
+      try {
+        data = await resp.json();
+      } catch (err) {
+        clearInterval(progressTimer);
+        progressWrap.style.display = 'none';
+        analyzeBtn.disabled = false;
+        analyzeBtn.textContent = 'Анализировать';
+        if (resp.status === 504 || resp.status === 502) {
+          showError('Сервер не успел обработать файл. Попробуйте файл с меньшим числом страниц.');
+        } else if (resp.status === 413) {
+          showError('Файл слишком большой для сервера.');
+        } else {
+          showError('Ошибка сервера (' + resp.status + '). Попробуйте позже.');
+        }
+        return;
+      }
+
+      finishProgress(() => {
+        analyzeBtn.disabled = false;
+        analyzeBtn.textContent = 'Анализировать';
+        if (!resp.ok) { showError(data.detail || 'Ошибка сервера'); return; }
+        renderTable(data.items);
+        countLabel.textContent = '(' + data.total + ' позиций)';
+        results.style.display = 'block';
+        results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
     });
 
     function renderTable(items) {
@@ -448,8 +473,8 @@ async def analyze_pdf(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Файл должен быть в формате PDF")
 
     content = await file.read()
-    if len(content) > 20 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Файл слишком большой (максимум 20 МБ)")
+    if len(content) > 4 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Файл слишком большой (максимум 4 МБ)")
 
     results = []
 
