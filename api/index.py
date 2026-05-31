@@ -221,10 +221,6 @@ HTML = """<!DOCTYPE html>
     analyzeBtn.addEventListener('click', async () => {
       const file = fileInput.files[0];
       if (!file) { showError('Пожалуйста, выберите PDF файл'); return; }
-      if (file.size > 4 * 1024 * 1024) {
-        showError('Файл слишком большой. Платформа ограничивает размер до 4 МБ.');
-        return;
-      }
       hideError();
       setLoading(true);
       const formData = new FormData();
@@ -473,8 +469,8 @@ async def analyze_pdf(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Файл должен быть в формате PDF")
 
     content = await file.read()
-    if len(content) > 4 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Файл слишком большой (максимум 4 МБ)")
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Файл слишком большой (максимум 20 МБ)")
 
     results = []
 
